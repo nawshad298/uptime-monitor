@@ -1,0 +1,62 @@
+version: "3.8"
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: uptime_monitor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # One-off job: applies migrations, then exits. Run this before (or
+  # alongside first boot of) the api/worker services. Not a long-running
+  # container - it has no restart policy on purpose.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "src/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/uptime_monitor
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/uptime_monitor
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/uptime_monitor
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # NOTE: exactly one replica. Do not scale this service - see the
+    # comment at the top of src/worker.js for why.
+
+volumes:
+  pgdata:
